@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main ]
   schedule:
-    - cron: '0 * * * *' # كل ساعة (يمكن تغييره حسب الحاجة)
+    - cron: '0 * * * *' # كل ساعة، يمكن تعديله حسب الحاجة
 
 jobs:
   run-bot:
@@ -23,11 +23,6 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-
-    - name: Set BOT_TOKEN environment variable
-      env:
-        BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-      run: echo "BOT_TOKEN is set"
 
     - name: Run bot
       env:
