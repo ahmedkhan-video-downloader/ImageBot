@@ -1,19 +1,18 @@
 # bot.py
 """
-Image & Video Utility Bot - Ahmed Khan
-Features:
-- Image: enhance, remove bg, cartoon, ascii (file), watermark, pdf (multi), compress, bw, invert, rotate, sticker (static/webp)
-- Video: compress, trim, to_gif, to_animated_sticker (webm)
-- AI image gen (optional) via external API if API key provided (IMAGE_API_PROVIDER, IMAGE_API_KEY)
-- Safe file handling, per-user session (in-memory), cleanup
-- Sends files (not links) to avoid HTTP 414
+ImageBot - Ahmed Khan
+Features: images (enhance, remove bg, cartoon, ascii, watermark, pdf, compress, bw, invert, rotate, sticker),
+video (compress, to_gif, to_animated_sticker), AI image gen (OpenAI), safe file handling, per-user session.
+Set secrets/environment variables:
+ - BOT_TOKEN (required)
+ - IMAGE_API_PROVIDER (optional: 'openai')
+ - IMAGE_API_KEY      (optional)
 """
+
 import os
 import uuid
-import shutil
 import traceback
 import tempfile
-import subprocess
 from functools import partial
 
 import telebot
@@ -24,31 +23,39 @@ import numpy as np
 from rembg import remove
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-# Optional video libs
+# Optional video support
 try:
-    from moviepy.editor import VideoFileClip, vfx, concatenate_videoclips
+    from moviepy.editor import VideoFileClip
+    MOVIEPY_OK = True
 except Exception:
     VideoFileClip = None
+    MOVIEPY_OK = False
 
-# Environment
-TOKEN = os.getenv("BOT_TOKEN")
-if not TOKEN:
+# Optional OpenAI support
+try:
+    import openai
+    OPENAI_OK = True
+except Exception:
+    OPENAI_OK = False
+
+# ----- Config via env -----
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
     raise SystemExit("ERROR: BOT_TOKEN environment variable not set. ضع توكن البوت في متغير البيئة BOT_TOKEN")
 
-# Optional AI image generator config (example: OpenAI / Stability / custom)
-IMAGE_API_PROVIDER = os.getenv("IMAGE_API_PROVIDER", "").lower()  # e.g., "openai" or "stability"
+IMAGE_API_PROVIDER = os.getenv("IMAGE_API_PROVIDER", "").lower()  # "openai"
 IMAGE_API_KEY = os.getenv("IMAGE_API_KEY", "")
 
-bot = telebot.TeleBot(TOKEN)
+bot = telebot.TeleBot(BOT_TOKEN)
 
 USER_TAG = "@AHMED_KHANA"
-DEV_NOTE = " المطور"
+DEV_NOTE = "بصفتي المطور"
 
-# simple in-memory per-user state: tracks list of uploaded files and pending step params
-# user_states[user_id] = {"images": [paths], "videos":[paths], "pending": {"action":..., "data":...}}
+# per-user in-memory state
+# { user_id: {"images":[paths], "videos":[paths], "pending":None}}
 user_states = {}
 
-# ---- Helpers ----
+# ---- Utilities ----
 def tmpname(prefix="tmp", ext=""):
     return f"{prefix}_{uuid.uuid4().hex}{('.' + ext) if ext else ''}"
 
@@ -56,7 +63,7 @@ def safe_remove(path):
     try:
         if path and os.path.exists(path):
             os.remove(path)
-    except Exception:
+    except:
         pass
 
 def cleanup_prefix(prefixes=("tmp_", "out_")):
@@ -192,7 +199,6 @@ def rotate_image(image_path, angle, out=None):
     return out
 
 def image_to_sticker(image_path, out=None):
-    """Create static webp sticker 512x512"""
     if out is None:
         out = tmpname("out_sticker", "webp")
     img = Image.open(image_path).convert("RGBA")
@@ -205,10 +211,10 @@ def image_to_sticker(image_path, out=None):
     bg.save(out, "WEBP")
     return out
 
-# ---- Video functions (moviepy required) ----
+# ---- Video functions ----
 def compress_video(video_path, out=None, target_bitrate="800k"):
-    if VideoFileClip is None:
-        raise RuntimeError("moviepy غير مثبت؛ لتشغيل وظائف الفيديو ثبّت moviepy")
+    if not MOVIEPY_OK:
+        raise RuntimeError("moviepy غير مثبت؛ لتشغيل فيديو ثبّت moviepy و ffmpeg")
     if out is None:
         out = tmpname("out_video", "mp4")
     clip = VideoFileClip(video_path)
@@ -216,37 +222,31 @@ def compress_video(video_path, out=None, target_bitrate="800k"):
     clip.close()
     return out
 
-def video_to_gif(video_path, out=None, fps=15):
-    if VideoFileClip is None:
+def video_to_gif(video_path, out=None, fps=15, duration=6):
+    if not MOVIEPY_OK:
         raise RuntimeError("moviepy غير مثبت")
     if out is None:
         out = tmpname("out_gif", "gif")
-    clip = VideoFileClip(video_path).subclip(0, min(10, VideoFileClip(video_path).duration))
+    clip = VideoFileClip(video_path).subclip(0, min(duration, VideoFileClip(video_path).duration))
     clip.write_gif(out, fps=fps)
     clip.close()
     return out
 
 def video_to_animated_sticker(video_path, out=None):
-    """
-    Create a short webm animation (vp8) compatible to send as document (Telegram
-    doesn't accept webm via send_sticker in bots reliably). We'll send as document.
-    """
-    if VideoFileClip is None:
+    if not MOVIEPY_OK:
         raise RuntimeError("moviepy غير مثبت")
     if out is None:
         out = tmpname("out_anim", "webm")
     clip = VideoFileClip(video_path)
-    # limit length to 5 seconds
     duration = min(5, clip.duration)
     sub = clip.subclip(0, duration)
-    # resize to max 512
     sub = sub.resize(width=512)
     sub.write_videofile(out, codec="libvpx", audio=False, logger=None, threads=0)
     clip.close()
     return out
 
 # ---- Save incoming files ----
-def save_photo_from_message(msg):
+def save_photo(msg):
     file_info = bot.get_file(msg.photo[-1].file_id)
     data = bot.download_file(file_info.file_path)
     fname = tmpname("tmp_img", "jpg")
@@ -254,7 +254,7 @@ def save_photo_from_message(msg):
         f.write(data)
     return fname
 
-def save_video_from_message(msg):
+def save_video(msg):
     file_info = bot.get_file(msg.video.file_id)
     data = bot.download_file(file_info.file_path)
     fname = tmpname("tmp_vid", "mp4")
@@ -262,7 +262,7 @@ def save_video_from_message(msg):
         f.write(data)
     return fname
 
-# ---- Keyboards & UI ----
+# ---- UI ----
 def keyboard():
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     buttons = [
@@ -288,13 +288,12 @@ def keyboard():
 @bot.message_handler(commands=['start','help'])
 def cmd_start(m):
     user_states.pop(m.from_user.id, None)
-    bot.reply_to(m, f"👋 مرحباً! أنا بوت أحمد خان. كيف أقدر أخدمك اليوم؟\nأرسل صورة أو فيديو ثم اختر العملية.", reply_markup=keyboard())
+    bot.reply_to(m, f"👋 مرحبًا! أنا بوت أحمد خان. كيف أقدر أخدمك اليوم؟\nأرسل صورة أو فيديو ثم اختر العملية.", reply_markup=keyboard())
 
-# handle photo(s)
 @bot.message_handler(content_types=['photo'])
 def on_photo(m):
     try:
-        fname = save_photo_from_message(m)
+        fname = save_photo(m)
         uid = m.from_user.id
         st = user_states.setdefault(uid, {"images": [], "videos": [], "pending": None})
         st["images"].append(fname)
@@ -302,11 +301,10 @@ def on_photo(m):
     except Exception as e:
         bot.reply_to(m, f"❌ خطأ أثناء حفظ الصورة: {e}")
 
-# handle video
 @bot.message_handler(content_types=['video'])
 def on_video(m):
     try:
-        fname = save_video_from_message(m)
+        fname = save_video(m)
         uid = m.from_user.id
         st = user_states.setdefault(uid, {"images": [], "videos": [], "pending": None})
         st["videos"].append(fname)
@@ -314,7 +312,7 @@ def on_video(m):
     except Exception as e:
         bot.reply_to(m, f"❌ خطأ أثناء حفظ الفيديو: {e}")
 
-# main action handler
+# ---- Main action handler ----
 @bot.message_handler(func=lambda m: True)
 def handle_action(m):
     uid = m.from_user.id
@@ -325,7 +323,7 @@ def handle_action(m):
 
     action = m.text.strip()
     try:
-        # Image actions (use last uploaded image by default)
+        # image single operations use last image
         if action == "تحسين الصورة":
             inp = st["images"][-1]
             out = enhance_image(inp)
@@ -352,7 +350,6 @@ def handle_action(m):
             send_photo(m.chat.id, out, caption=f"💧 تم إضافة العلامة المائية\nالمطور: {USER_TAG}")
 
         elif action == "تحويل إلى PDF":
-            # use all saved images
             images = st["images"]
             out = image_to_pdf(images)
             send_doc(m.chat.id, out, caption=f"📄 تم تحويل الصور إلى PDF\nالمطور: {USER_TAG}")
@@ -374,20 +371,19 @@ def handle_action(m):
 
         elif action == "تدوير الصورة":
             inp = st["images"][-1]
-            # default rotate 90; for advanced: implement follow-up prompt to choose angle
+            # default rotate 90; can be extended with follow-up prompt
             out = rotate_image(inp, 90)
             send_photo(m.chat.id, out, caption=f"🔁 تدوير 90°\nالمطور: {USER_TAG}")
 
         elif action == "تحويل إلى ملصق":
             inp = st["images"][-1]
             out = image_to_sticker(inp)
-            # bots can send webp as sticker file; if fails, send as document
             try:
                 with open(out, "rb") as s:
                     bot.send_sticker(m.chat.id, s)
                 bot.send_message(m.chat.id, f"✅ تم إنشاء الملصق\nالمطور: {USER_TAG}")
             except Exception:
-                send_doc(m.chat.id, out, caption=f"✅ تم إنشاء الملصق (مرسل كملف)\nالمطور: {USER_TAG}")
+                send_doc(m.chat.id, out, caption=f"✅ تم إنشاء الملصق (ملف webp)\nالمطور: {USER_TAG}")
 
         # Video actions
         elif action == "ضغط الفيديو":
@@ -415,11 +411,10 @@ def handle_action(m):
             send_doc(m.chat.id, out, caption=f"✅ تم إنشاء الملصق المتحرك (webm)\nالمطور: {USER_TAG}")
 
         elif action == "توليد صورة بالذكاء الاصطناعي":
-            # simple flow: if IMAGE_API_KEY provided, generate with provider
-            if not IMAGE_API_KEY or not IMAGE_API_PROVIDER:
-                bot.reply_to(m, "⚠️ لم يتم إعداد API للتوليد. ضع IMAGE_API_PROVIDER و IMAGE_API_KEY كمتغيرات بيئة.")
+            if IMAGE_API_PROVIDER != "openai" or not IMAGE_API_KEY:
+                bot.reply_to(m, "⚠️ لم يتم إعداد API للتوليد. ضع IMAGE_API_PROVIDER=openai و IMAGE_API_KEY في متغيرات البيئة.")
                 return
-            bot.reply_to(m, "🔄 جاري توليد الصورة... أرسل وصفًا للنص المطلوب.")
+            bot.reply_to(m, "🔄 أرسل وصف (prompt) للصورة التي تريد توليدها.")
             st["pending"] = {"action": "ai_generate"}
             return
 
@@ -427,54 +422,54 @@ def handle_action(m):
             bot.reply_to(m, "❓ أمر غير معروف — اختر من الأزرار أو اكتب /help.")
             return
 
-        # after successful action: notify and cleanup outputs & user inputs
         bot.send_message(m.chat.id, f"✅ تمت العملية. المطور: {USER_TAG}")
     except Exception as e:
         tb = traceback.format_exc()
         bot.reply_to(m, f"❌ حدث خطأ أثناء المعالجة: {e}\n\n{tb}")
     finally:
-        # cleanup user's input files and generated outputs matching prefixes
+        # cleanup user's inputs and temporary outputs
         imgs = st.get("images", [])
         vids = st.get("videos", [])
         for p in imgs + vids:
             safe_remove(p)
-        cleanup_prefix(("tmp_img","tmp_vid","out_"))
+        cleanup_prefix(prefixes=("tmp_", "out_"))
         user_states.pop(uid, None)
 
-# Handle follow-up messages for AI generation or parameters
+# ---- Follow-up handler for AI prompt ----
 @bot.message_handler(func=lambda m: True)
 def followups(m):
     uid = m.from_user.id
     st = user_states.get(uid)
     if not st or not st.get("pending"):
-        return  # ignore, handled elsewhere
+        return
     pending = st["pending"]
     try:
         if pending["action"] == "ai_generate":
             prompt = m.text.strip()
-            bot.reply_to(m, "🔄 جاري طلب التوليد... انتظر لحظة.")
-            # Example: support OpenAI image generation (user must provide key)
-            if IMAGE_API_PROVIDER == "openai":
-                # minimal example using openai python lib if installed and API key set
+            bot.reply_to(m, "🔄 جاري توليد الصورة... انتظر لحظة.")
+            if IMAGE_API_PROVIDER == "openai" and IMAGE_API_KEY:
+                if not OPENAI_OK:
+                    bot.reply_to(m, "⚠️ مكتبة openai غير مثبتة في البيئة. رجاءً ثبّت openai.")
+                    st["pending"] = None
+                    return
                 try:
-                    import openai
                     openai.api_key = IMAGE_API_KEY
-                    resp = openai.Image.create(prompt=prompt, size="1024x1024", n=1)
+                    resp = openai.Image.create(prompt=prompt, n=1, size="1024x1024")
                     b64 = resp['data'][0]['b64_json']
                     import base64
-                    imgdata = base64.b64decode(b64)
+                    data = base64.b64decode(b64)
                     out = tmpname("out_ai", "png")
                     with open(out, "wb") as f:
-                        f.write(imgdata)
+                        f.write(data)
                     send_photo(m.chat.id, out, caption=f"🖼️ تم توليد الصورة بواسطة AI\nالمطور: {USER_TAG}")
                     safe_remove(out)
                 except Exception as e:
-                    bot.reply_to(m, f"⚠️ فشل التوليد عبر OpenAI: {e}")
+                    bot.reply_to(m, f"❌ فشل التوليد: {e}")
             else:
-                bot.reply_to(m, "⚠️ موفر توليد الصور غير مدعوم حالياً في البوت. ادعم IMAGE_API_PROVIDER=openai مع IMAGE_API_KEY.")
+                bot.reply_to(m, "⚠️ موفر التوليد غير مهيأ. اضبط IMAGE_API_PROVIDER=OpenAI و IMAGE_API_KEY.")
             st["pending"] = None
     except Exception as e:
-        bot.reply_to(m, f"❌ خطأ في العملية التالية: {e}")
+        bot.reply_to(m, f"❌ خطأ أثناء العملية التالية: {e}")
 
 if __name__ == "__main__":
     print("ImageBot starting...")
