@@ -49,7 +49,7 @@ IMAGE_API_KEY = os.getenv("IMAGE_API_KEY", "")
 bot = telebot.TeleBot(BOT_TOKEN)
 
 USER_TAG = "@AHMED_KHANA"
-DEV_NOTE = "بصفتي المطور"
+DEV_NOTE = " المطور"
 
 # per-user in-memory state
 # { user_id: {"images":[paths], "videos":[paths], "pending":None}}
