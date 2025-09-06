@@ -24,13 +24,15 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y ffmpeg
 
-    -- name: Install Python dependencies
-  run: |
-    pip install --upgrade pip
-    # ثبت onnxruntime أولاً بشكل منفصل
-    pip install onnxruntime==1.15.1
-    # ثم ثبت باقي المتطلبات
-    pip install pyTelegramBotAPI opencv-python rembg Pillow moviepy numpy diffusers transformers accelerate torch torchvision
+    - name: Install Python dependencies
+      run: |
+        pip install --upgrade pip
+        # الأساسيات أولاً
+        pip install pyTelegramBotAPI numpy Pillow
+        # المكاتب التي تحتاجها مكتبات أخرى
+        pip install onnxruntime==1.15.1
+        # باقي المتطلبات
+        pip install opencv-python rembg moviepy diffusers transformers accelerate torch torchvision
 
     - name: Create .env file
       run: |
