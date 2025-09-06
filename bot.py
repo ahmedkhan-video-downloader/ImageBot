@@ -1,8 +1,9 @@
 # bot.py
 """
-ImageBot - Ahmed Khan
+ImageBot - Ahmed Khan (محدث)
 Features: images (enhance, remove bg, cartoon, ascii, watermark, pdf, compress, bw, invert, rotate, sticker),
-video (compress, to_gif, to_animated_sticker), safe file handling, per-user session.
+video (compress, to_gif, to_animated_sticker), AI image generation (OpenAI/HuggingFace/Pollinations fallback),
+safe file handling, per-user session.
 """
 
 import os
@@ -11,7 +12,10 @@ import traceback
 import logging
 import threading
 import time
+import base64
+from urllib.parse import quote_plus
 
+import requests
 import telebot
 from telebot import types
 
@@ -35,16 +39,18 @@ except Exception:
 try:
     from rembg import remove
     REMBG_AVAILABLE = True
-except ImportError as e:
+except Exception as e:
     logger.warning(f"rembg not available: {e}")
     REMBG_AVAILABLE = False
-    def remove(data):
-        raise Exception("ميزة إزالة الخلفية غير متاحة. جرب ميزات أخرى!")
 
 # ----- Config via env -----
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise SystemExit("ERROR: BOT_TOKEN environment variable not set. ضع توكن البوت في متغير البيئة BOT_TOKEN")
+
+# AI config (optional)
+IMAGE_API_PROVIDER = os.getenv("IMAGE_API_PROVIDER", "").lower()  # "openai" or "huggingface" or empty
+IMAGE_API_KEY = os.getenv("IMAGE_API_KEY", "")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -93,10 +99,8 @@ def enhance_image(image_path, out=None):
 def remove_bg_image(image_path, out=None):
     if out is None:
         out = tmpname("out_nobg", "png")
-    
     if not REMBG_AVAILABLE:
-        raise Exception("⚠️ ميزة إزالة الخلفية غير متاحة. جرب ميزات أخرى!")
-    
+        raise Exception("⚠️ ميزة إزالة الخلفية غير متاحة في هذه البيئة.")
     with open(image_path, "rb") as f:
         data = f.read()
     result = remove(data)
@@ -145,7 +149,7 @@ def add_watermark(image_path, out=None, text=None):
     img = Image.open(image_path).convert("RGBA")
     iw, ih = img.size
     try:
-        font = ImageFont.truetype("arial.ttf", 28)
+        font = ImageFont.truetype("DejaVuSans.ttf", 28)
     except:
         font = ImageFont.load_default()
     draw = ImageDraw.Draw(img)
@@ -221,7 +225,7 @@ def compress_video(video_path, out=None, target_bitrate="800k"):
     if out is None:
         out = tmpname("out_video", "mp4")
     clip = VideoFileClip(video_path)
-    clip.write_videofile(out, bitrate=target_bitrate, audio=True, threads=4, logger=None, verbose=False)
+    clip.write_videofile(out, bitrate=target_bitrate, audio=True, threads=4, logger=None)
     clip.close()
     return out
 
@@ -231,7 +235,7 @@ def video_to_gif(video_path, out=None, fps=15, duration=6):
     if out is None:
         out = tmpname("out_gif", "gif")
     clip = VideoFileClip(video_path).subclip(0, min(duration, VideoFileClip(video_path).duration))
-    clip.write_gif(out, fps=fps, program='ffmpeg', verbose=False)
+    clip.write_gif(out, fps=fps, program='ffmpeg')
     clip.close()
     return out
 
@@ -244,7 +248,7 @@ def video_to_animated_sticker(video_path, out=None):
     duration = min(5, clip.duration)
     sub = clip.subclip(0, duration)
     sub = sub.resize(width=512)
-    sub.write_videofile(out, codec="libvpx", audio=False, logger=None, threads=4, verbose=False, bitrate="500k")
+    sub.write_videofile(out, codec="libvpx", audio=False, logger=None, threads=4, bitrate="500k")
     clip.close()
     return out
 
@@ -273,6 +277,82 @@ def save_document(msg):
     with open(fname, "wb") as f:
         f.write(data)
     return fname
+
+# ---- AI image generation (OpenAI / HuggingFace / Pollinations fallback) ----
+def generate_image_ai(prompt, out_path=None, hf_model="stabilityai/stable-diffusion-2", timeout=60):
+    """
+    يحاول يولد صورة حسب الـ prompt بالترتيب:
+    1) OpenAI (إذا IMAGE_API_PROVIDER == 'openai' ومفتاح موجود)
+    2) HuggingFace Inference API (إذا IMAGE_API_PROVIDER == 'huggingface' وHF token موجود)
+    3) Pollinations (fallback مجاني بدون مفتاح)
+    يعيد مسار الملف الناتج أو يرفع استثناء.
+    """
+    if out_path is None:
+        out_path = tmpname("out_ai", "png")
+
+    # 1) OpenAI DALL·E (لو مفعل)
+    if IMAGE_API_PROVIDER == "openai" and IMAGE_API_KEY:
+        try:
+            import openai
+            openai.api_key = IMAGE_API_KEY
+            resp = openai.Image.create(prompt=prompt, n=1, size="1024x1024")
+            b64 = resp['data'][0]['b64_json']
+            imgdata = base64.b64decode(b64)
+            with open(out_path, "wb") as f:
+                f.write(imgdata)
+            return out_path
+        except Exception as e:
+            logger.warning(f"[AI] OpenAI failed: {e}")
+
+    # 2) HuggingFace Inference API
+    if IMAGE_API_PROVIDER == "huggingface" and IMAGE_API_KEY:
+        try:
+            hf_url = f"https://api-inference.huggingface.co/models/{hf_model}"
+            headers = {"Authorization": f"Bearer {IMAGE_API_KEY}"}
+            payload = {"inputs": prompt}
+            r = requests.post(hf_url, headers=headers, json=payload, timeout=timeout)
+            if r.status_code == 200:
+                content_type = r.headers.get("content-type", "")
+                if "application/json" in content_type:
+                    data = r.json()
+                    if isinstance(data, dict) and data.get("images"):
+                        b64 = data["images"][0].split(",")[-1]
+                        img = base64.b64decode(b64)
+                        with open(out_path, "wb") as f:
+                            f.write(img)
+                        return out_path
+                    elif isinstance(data, dict) and data.get("b64_json"):
+                        img = base64.b64decode(data["b64_json"])
+                        with open(out_path, "wb") as f:
+                            f.write(img)
+                        return out_path
+                else:
+                    with open(out_path, "wb") as f:
+                        f.write(r.content)
+                    return out_path
+            else:
+                logger.warning(f"[AI] HF inference returned {r.status_code}: {r.text}")
+        except Exception as e:
+            logger.warning(f"[AI] HuggingFace failed: {e}")
+
+    # 3) Pollinations fallback (مجاني بدون مفتاح)
+    try:
+        url = "https://image.pollinations.ai/prompt/" + quote_plus(prompt)
+        last_err = None
+        for attempt in range(3):
+            try:
+                r = requests.get(url, timeout=30)
+                if r.status_code == 200 and r.content:
+                    with open(out_path, "wb") as f:
+                        f.write(r.content)
+                    return out_path
+                last_err = f"status {r.status_code}"
+            except Exception as e:
+                last_err = str(e)
+                time.sleep(1)
+        raise RuntimeError(f"Pollinations failed: {last_err}")
+    except Exception as e:
+        raise RuntimeError(f"All AI providers failed: {e}")
 
 # ---- UI ----
 def keyboard():
@@ -340,7 +420,6 @@ def on_video(m):
 @bot.message_handler(content_types=['document'])
 def on_document(m):
     try:
-        # Check if it's an image document
         if m.document.mime_type.startswith('image/'):
             fname = save_document(m)
             uid = m.from_user.id
@@ -355,21 +434,26 @@ def on_document(m):
 def handle_action(m):
     uid = m.from_user.id
     st = user_states.get(uid)
-    
-    # إذا كان يريد توليد صور
-    if m.text.strip() == "توليد صورة بالذكاء الاصطناعي":
-        bot.reply_to(m, "⚠️ خدمة توليد الصور بالذكاء الاصطناعي غير متاحة حالياً\n\n🎨 لكن يمكنك استخدام هذه الميزات الرائعة:\n• 📸 تحسين الصور\n• 🖼️ إزالة الخلفية\n• 🎨 تحويل إلى كرتون\n• 💧 إضافة علامة مائية\n• 📄 تحويل إلى PDF\n• 📉 ضغط الصور\n• ⚫ أبيض وأسود\n• 🔄 عكس الألوان\n• 🔁 تدوير الصور\n• ✨ تحويل إلى ملصق\n• 🎥 معالجة الفيديو")
+
+    text = (m.text or "").strip()
+
+    # If user clicked AI generate button: start pending prompt
+    if text == "توليد صورة بالذكاء الاصطناعي":
+        user_states.setdefault(uid, {"images": [], "videos": [], "pending": None})
+        user_states[uid]["pending"] = {"action": "ai_generate"}
+        bot.reply_to(m, "🔎 اكتب وصف الصورة التي تريد توليدها (بالعربي أو بالإنجليزي)، ثم أرسل النص.")
         return
-        
+
+    # if pending rotate is handled by separate handler (below)
     if not st:
         user_states[uid] = {"images": [], "videos": [], "pending": None}
         st = user_states[uid]
-        
-    if not st["images"] and not st["videos"]:
+
+    if not st["images"] and not st["videos"] and (not st.get("pending") or st["pending"].get("action") != "ai_generate"):
         bot.reply_to(m, "⚠️ أرسل صورة أو فيديو أولاً ثم اختر العملية.", reply_markup=keyboard())
         return
 
-    action = m.text.strip()
+    action = text
     try:
         # image single operations use last image
         if action == "تحسين الصورة":
@@ -490,27 +574,50 @@ def check_pending_action(m, action_name):
 def handle_rotate_prompt(m):
     uid = m.from_user.id
     st = user_states.get(uid)
-    
+
     if not st or not st.get("pending"):
         bot.reply_to(m, "❌ جلسة منتهية. أرسل /start للبدء من جديد.")
         return
-        
+
     try:
         angle = int(m.text.strip())
         if angle not in [90, 180, 270]:
             bot.reply_to(m, "الزاوية يجب أن تكون 90, 180, أو 270 فقط")
             return
-            
+
         image_path = st["pending"]["image"]
         out = rotate_image(image_path, angle)
         send_photo(m.chat.id, out, caption=f"🔁 تدوير {angle}°\nالمطور: {USER_TAG}")
         safe_remove(out)
-        
+
     except ValueError:
         bot.reply_to(m, "رجاء أدخل رقم صحيح للزاوية")
         return
     except Exception as e:
         bot.reply_to(m, f"❌ حدث خطأ أثناء التدوير: {e}")
+    finally:
+        st["pending"] = None
+
+# ---- Handler for AI prompt follow-up ----
+@bot.message_handler(func=lambda m: (user_states.get(m.from_user.id, {}).get("pending") or {}).get("action") == "ai_generate")
+def handle_ai_followup(m):
+    uid = m.from_user.id
+    st = user_states.get(uid)
+    if not st or not st.get("pending"):
+        bot.reply_to(m, "❌ جلسة منتهية. أرسل /start للبدء من جديد.")
+        return
+    prompt_text = (m.text or "").strip()
+    if not prompt_text:
+        bot.reply_to(m, "✍️ الرجاء إرسال وصف واضح للصورة المطلوبة.")
+        return
+    bot.reply_to(m, "🔄 جاري توليد الصورة... قد يستغرق الأمر عدة ثواني.")
+    try:
+        out = generate_image_ai(prompt_text)
+        send_photo(m.chat.id, out, caption=f"🖼️ تم توليد الصورة بواسطة AI\nالمطور: {USER_TAG}")
+        safe_remove(out)
+    except Exception as e:
+        bot.reply_to(m, f"❌ فشل التوليد: {e}")
+        logger.error(f"AI generation failed: {traceback.format_exc()}")
     finally:
         st["pending"] = None
 
@@ -524,11 +631,11 @@ if __name__ == "__main__":
     # بدء thread لحفظ البوت نشط
     keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
     keep_alive_thread.start()
-    
+
     logger.info("ImageBot starting...")
     if not REMBG_AVAILABLE:
         logger.warning("rembg not available. Background removal feature disabled.")
-    
+
     try:
         bot.infinity_polling()
     except Exception as e:
