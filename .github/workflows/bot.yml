@@ -33,7 +33,7 @@ jobs:
       run: |
         echo "BOT_TOKEN=${{ secrets.BOT_TOKEN }}" > .env
         echo "USER_TAG=@AHMED_KHANA" >> .env
-        echo "DEV_NOTE=بصفتي المطور" >> .env
+        echo "DEV_NOTE= المطور" >> .env
 
     - name: Run Image Bot
       env:
