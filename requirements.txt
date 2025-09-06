@@ -1,12 +1,12 @@
-pyTelegramBotAPI
-opencv-python
-rembg
-Pillow
-moviepy
-numpy
-diffusers
-transformers
-accelerate
-torch
-torchvision
-onnxruntime  # أضف هذا السطر
+pyTelegramBotAPI==4.14.0
+opencv-python==4.8.1.78
+rembg==2.0.30
+Pillow==9.5.0
+moviepy==1.0.3
+numpy==1.24.3
+diffusers==0.24.0
+transformers==4.34.0
+accelerate==0.24.0
+torch==2.0.1
+torchvision==0.15.2
+onnxruntime==1.15.1
