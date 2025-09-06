@@ -57,7 +57,7 @@ if not BOT_TOKEN:
 bot = telebot.TeleBot(BOT_TOKEN)
 
 USER_TAG = "@AHMED_KHANA"
-DEV_NOTE = "بصفتي المطور"
+DEV_NOTE = " المطور"
 
 # per-user in-memory state
 user_states = {}
@@ -399,23 +399,44 @@ def on_document(m):
     except Exception as e:
         bot.reply_to(m, f"❌ خطأ أثناء حفظ الملف: {e}")
 
-# ---- Main action handler ----
-@bot.message_handler(func=lambda m: True)
-def handle_action(m):
+# # عدل دالة handle_ai_prompt بهذا الشكل:
+@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("pending") == "ai_generate")
+def handle_ai_prompt(m):
     uid = m.from_user.id
     st = user_states.get(uid)
     
-    # إذا كان يريد توليد صور ولم يرسل وصف بعد
-    if m.text.strip() == "توليد صورة بالذكاء الاصطناعي":
-        bot.reply_to(m, "🔄 أرسل وصف (prompt) للصورة التي تريد توليدها بالعربية أو الإنجليزية:")
-        user_states.setdefault(uid, {"images": [], "videos": [], "pending": "ai_generate"})
+    if not st:
+        bot.reply_to(m, "❌ جلسة منتهية. أرسل /start للبدء من جديد.")
         return
         
-    if not st or (not st["images"] and not st["videos"]):
-        bot.reply_to(m, "⚠️ أرسل صورة أو فيديو أولاً ثم اختر العملية.", reply_markup=keyboard())
-        return
-
-    action = m.text.strip()
+    prompt = m.text.strip()
+    try:
+        bot.send_message(m.chat.id, "⏳ جاري توليد الصورة... (قد يستغرق 1-2 دقائق)")
+        
+        # Debug: طباعة المعلومات
+        print(f"🔄 محاولة توليد صورة للمستخدم {uid} بالوصف: {prompt}")
+        print(f"📦 حالة Stable Diffusion: {SD_AVAILABLE}")
+        
+        if not SD_AVAILABLE:
+            raise Exception("Stable Diffusion غير متاح. تأكد من تثبيت المكتبات.")
+        
+        out_path = generate_ai_image_free(prompt)
+        
+        print(f"✅ تم توليد الصورة بنجاح: {out_path}")
+        
+        with open(out_path, 'rb') as photo:
+            bot.send_photo(m.chat.id, photo, caption=f"🖼️ تم التوليد بنجاح!\nالوصف: {prompt}\n{USER_TAG}")
+        
+        safe_remove(out_path)
+        
+    except Exception as e:
+        error_msg = f"❌ فشل في توليد الصورة: {str(e)}"
+        bot.reply_to(m, error_msg)
+        print(f"💥 خطأ في التوليد: {traceback.format_exc()}")  # هذا سيعطيك تفاصيل الخطأ
+    
+    finally:
+        # Reset user state
+        st["pending"] = None
     try:
         # image single operations use last image
         if action == "تحسين الصورة":
