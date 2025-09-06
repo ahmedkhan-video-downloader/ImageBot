@@ -2,7 +2,7 @@
 """
 ImageBot - Ahmed Khan
 Features: images (enhance, remove bg, cartoon, ascii, watermark, pdf, compress, bw, invert, rotate, sticker),
-video (compress, to_gif, to_animated_sticker), AI image gen (Free Stable Diffusion), safe file handling, per-user session.
+video (compress, to_gif, to_animated_sticker), safe file handling, per-user session.
 """
 
 import os
@@ -30,14 +30,6 @@ try:
 except Exception:
     VideoFileClip = None
     MOVIEPY_OK = False
-
-# Optional Stable Diffusion support
-try:
-    from diffusers import StableDiffusionPipeline
-    import torch
-    SD_AVAILABLE = True
-except Exception:
-    SD_AVAILABLE = False
 
 # Optional rembg support
 try:
@@ -85,47 +77,6 @@ def send_photo(chat_id, path, caption=None):
 def send_doc(chat_id, path, caption=None):
     with open(path, "rb") as f:
         bot.send_document(chat_id, f, caption=caption)
-
-# ---- Stable Diffusion Image Generation ----
-def generate_ai_image_free(prompt, out=None):
-    if out is None:
-        out = tmpname("out_ai", "png")
-    
-    try:
-        if not SD_AVAILABLE:
-            raise Exception("مكتبة Stable Diffusion غير مثبتة. run: pip install diffusers transformers accelerate torch torchvision")
-        
-        # استخدام نموذج خفيف وسريع
-        model_id = "OFA-Sys/small-stable-diffusion-v0"
-        
-        pipe = StableDiffusionPipeline.from_pretrained(
-            model_id,
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-            safety_checker=None  # إلغاء الفحص للسرعة
-        )
-        
-        if torch.cuda.is_available():
-            pipe = pipe.to("cuda")
-            logger.info("Using GPU for image generation")
-        else:
-            logger.info("Using CPU for image generation (سيكون أبطأ)")
-        
-        # توليد الصورة بمعلمات سريعة
-        image = pipe(
-            prompt, 
-            num_inference_steps=20,
-            guidance_scale=7.5,
-            width=512,
-            height=512
-        ).images[0]
-        
-        image.save(out)
-        logger.info(f"Successfully generated image for prompt: {prompt}")
-        return out
-        
-    except Exception as e:
-        logger.error(f"Image generation failed: {str(e)}")
-        raise Exception(f"فشل التوليد: {str(e)}")
 
 # ---- Image functions ----
 def enhance_image(image_path, out=None):
@@ -399,44 +350,26 @@ def on_document(m):
     except Exception as e:
         bot.reply_to(m, f"❌ خطأ أثناء حفظ الملف: {e}")
 
-# # عدل دالة handle_ai_prompt بهذا الشكل:
-@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("pending") == "ai_generate")
-def handle_ai_prompt(m):
+# ---- Main action handler ----
+@bot.message_handler(func=lambda m: True)
+def handle_action(m):
     uid = m.from_user.id
     st = user_states.get(uid)
     
-    if not st:
-        bot.reply_to(m, "❌ جلسة منتهية. أرسل /start للبدء من جديد.")
+    # إذا كان يريد توليد صور
+    if m.text.strip() == "توليد صورة بالذكاء الاصطناعي":
+        bot.reply_to(m, "⚠️ خدمة توليد الصور بالذكاء الاصطناعي غير متاحة حالياً\n\n🎨 لكن يمكنك استخدام هذه الميزات الرائعة:\n• 📸 تحسين الصور\n• 🖼️ إزالة الخلفية\n• 🎨 تحويل إلى كرتون\n• 💧 إضافة علامة مائية\n• 📄 تحويل إلى PDF\n• 📉 ضغط الصور\n• ⚫ أبيض وأسود\n• 🔄 عكس الألوان\n• 🔁 تدوير الصور\n• ✨ تحويل إلى ملصق\n• 🎥 معالجة الفيديو")
         return
         
-    prompt = m.text.strip()
-    try:
-        bot.send_message(m.chat.id, "⏳ جاري توليد الصورة... (قد يستغرق 1-2 دقائق)")
+    if not st:
+        user_states[uid] = {"images": [], "videos": [], "pending": None}
+        st = user_states[uid]
         
-        # Debug: طباعة المعلومات
-        print(f"🔄 محاولة توليد صورة للمستخدم {uid} بالوصف: {prompt}")
-        print(f"📦 حالة Stable Diffusion: {SD_AVAILABLE}")
-        
-        if not SD_AVAILABLE:
-            raise Exception("Stable Diffusion غير متاح. تأكد من تثبيت المكتبات.")
-        
-        out_path = generate_ai_image_free(prompt)
-        
-        print(f"✅ تم توليد الصورة بنجاح: {out_path}")
-        
-        with open(out_path, 'rb') as photo:
-            bot.send_photo(m.chat.id, photo, caption=f"🖼️ تم التوليد بنجاح!\nالوصف: {prompt}\n{USER_TAG}")
-        
-        safe_remove(out_path)
-        
-    except Exception as e:
-        error_msg = f"❌ فشل في توليد الصورة: {str(e)}"
-        bot.reply_to(m, error_msg)
-        print(f"💥 خطأ في التوليد: {traceback.format_exc()}")  # هذا سيعطيك تفاصيل الخطأ
-    
-    finally:
-        # Reset user state
-        st["pending"] = None
+    if not st["images"] and not st["videos"]:
+        bot.reply_to(m, "⚠️ أرسل صورة أو فيديو أولاً ثم اختر العملية.", reply_markup=keyboard())
+        return
+
+    action = m.text.strip()
     try:
         # image single operations use last image
         if action == "تحسين الصورة":
@@ -542,43 +475,24 @@ def handle_ai_prompt(m):
         cleanup_prefix(prefixes=("tmp_", "out_"))
         user_states.pop(uid, None)
 
-# ---- Handler for AI prompt ----
-@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("pending") == "ai_generate")
-def handle_ai_prompt(m):
-    uid = m.from_user.id
-    st = user_states.get(uid)
-    
-    if not st:
-        return
-        
-    prompt = m.text.strip()
-    try:
-        bot.send_message(m.chat.id, "⏳ جاري توليد الصورة... (قد يستغرق 1-2 دقائق)")
-        
-        out_path = generate_ai_image_free(prompt)
-        
-        with open(out_path, 'rb') as photo:
-            bot.send_photo(m.chat.id, photo, caption=f"🖼️ تم التوليد بنجاح!\nالوصف: {prompt}\n{USER_TAG}")
-        
-        safe_remove(out_path)
-        logger.info(f"Successfully generated image for user {uid}")
-        
-    except Exception as e:
-        error_msg = f"❌ فشل في توليد الصورة: {str(e)}"
-        bot.reply_to(m, error_msg)
-        logger.error(f"AI generation failed for user {uid}: {str(e)}")
-    
-    finally:
-        # Reset user state
-        st["pending"] = None
-
 # ---- Handler for rotate prompt ----
-@bot.message_handler(func=lambda m: user_states.get(m.from_user.id, {}).get("pending", {}).get("action") == "rotate")
+def check_pending_action(m, action_name):
+    uid = m.from_user.id
+    user_data = user_states.get(uid)
+    if not user_data:
+        return False
+    pending = user_data.get("pending")
+    if not pending or not isinstance(pending, dict):
+        return False
+    return pending.get("action") == action_name
+
+@bot.message_handler(func=lambda m: check_pending_action(m, "rotate"))
 def handle_rotate_prompt(m):
     uid = m.from_user.id
     st = user_states.get(uid)
     
     if not st or not st.get("pending"):
+        bot.reply_to(m, "❌ جلسة منتهية. أرسل /start للبدء من جديد.")
         return
         
     try:
@@ -611,12 +525,7 @@ if __name__ == "__main__":
     keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
     keep_alive_thread.start()
     
-    logger.info("ImageBot starting with Stable Diffusion support...")
-    if SD_AVAILABLE:
-        logger.info("Stable Diffusion is available!")
-    else:
-        logger.warning("Stable Diffusion not available. Install: pip install diffusers transformers accelerate torch torchvision")
-    
+    logger.info("ImageBot starting...")
     if not REMBG_AVAILABLE:
         logger.warning("rembg not available. Background removal feature disabled.")
     
