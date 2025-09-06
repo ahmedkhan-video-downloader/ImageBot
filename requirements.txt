@@ -9,3 +9,4 @@ transformers
 accelerate
 torch
 torchvision
+onnxruntime  # أضف هذا السطر
