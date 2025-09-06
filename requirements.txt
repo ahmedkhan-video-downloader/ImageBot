@@ -1,10 +1,25 @@
-pyTelegramBotAPI==4.12.0
-opencv-python-headless==4.7.0.72
-numpy
-Pillow
-requests
-rembg
-onnxruntime
-moviepy
-imageio[ffmpeg]
-openai
+# مكتبات أساسية
+numpy<2.0
+opencv-python==4.8.1.78
+Pillow==10.2.0
+requests==2.31.0
+
+# مكتبة البوت
+pyTelegramBotAPI==4.14.0
+
+# إزالة الخلفية
+rembg==2.0.50
+
+# مكتبات تحويل الفيديو إلى GIF
+moviepy==1.0.3
+imageio==2.33.1
+imageio-ffmpeg==0.4.9
+
+# ذكاء اصطناعي لتوليد الصور
+openai==1.3.9
+
+# معالجة النصوص والصور
+scikit-image==0.21.0
+
+# مكتبة ضغط وتحسين الصور
+tqdm==4.66.2
