@@ -24,15 +24,23 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y ffmpeg
 
-    - name: Install Python dependencies
+    - name: Install Python dependencies (compatible versions)
       run: |
         pip install --upgrade pip
-        # الأساسيات أولاً
-        pip install pyTelegramBotAPI numpy Pillow
-        # المكاتب التي تحتاجها مكتبات أخرى
-        pip install onnxruntime==1.15.1
-        # باقي المتطلبات
-        pip install opencv-python rembg moviepy diffusers transformers accelerate torch torchvision
+        # إصدارات متوافقة تماماً لتجنب مشاكل numpy
+        pip install "numpy==1.24.3"
+        pip install "onnxruntime==1.15.1"
+        pip install "opencv-python==4.8.1.78"
+        pip install "rembg==2.0.30"
+        pip install "Pillow==9.5.0"
+        pip install "pyTelegramBotAPI==4.14.0"
+        pip install "moviepy==1.0.3"
+        pip install "numpy==1.24.3"  # للتأكد من عدم تحديثه
+        pip install "diffusers==0.24.0"
+        pip install "transformers==4.34.0"
+        pip install "accelerate==0.24.0"
+        pip install "torch==2.0.1" --index-url https://download.pytorch.org/whl/cpu
+        pip install "torchvision==0.15.2" --index-url https://download.pytorch.org/whl/cpu
 
     - name: Create .env file
       run: |
@@ -40,16 +48,34 @@ jobs:
         echo "USER_TAG=@AHMED_KHANA" >> .env
         echo "DEV_NOTE= المطور" >> .env
 
+    - name: Test Stable Diffusion setup
+      run: |
+        echo "🔄 Testing Stable Diffusion setup..."
+        python -c "
+        try:
+            from diffusers import StableDiffusionPipeline
+            import torch
+            print('✅ Stable Diffusion imports successful')
+        except Exception as e:
+            print(f'❌ Stable Diffusion import failed: {e}')
+            exit(1)
+        "
+
+    - name: Test rembg setup
+      run: |
+        echo "🔄 Testing rembg setup..."
+        python -c "
+        try:
+            from rembg import remove
+            print('✅ rembg imports successful')
+        except Exception as e:
+            print(f'❌ rembg import failed: {e}')
+            exit(1)
+        "
+
     - name: Run Image Bot
       env:
         BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
       run: |
-        echo "🔄 Downloading Stable Diffusion model (may take 5-10 minutes)..."
-        python -c "
-        from diffusers import StableDiffusionPipeline
-        import torch
-        print('✅ Stable Diffusion setup complete')
-        "
-        
         echo "🚀 Starting bot..."
         python bot.py
