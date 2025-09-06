@@ -212,13 +212,13 @@ def on_photo(m):
 
 # ... (بقية handlers تبقى كما هي) ...
 
-# ---- Main action handler ----
+## ---- Main action handler ----
 @bot.message_handler(func=lambda m: True)
 def handle_action(m):
     uid = m.from_user.id
     st = user_states.get(uid)
     
-    # إذا كان يريد توليد صور ولم يرسل وصف بعد
+    # معالجة طلب توليد الصور أولاً
     if m.text.strip() == "توليد صورة بالذكاء الاصطناعي":
         bot.reply_to(m, "🔄 أرسل وصف (prompt) للصورة التي تريد توليدها بالعربية أو الإنجليزية:")
         user_states.setdefault(uid, {"images": [], "videos": [], "pending": "ai_generate"})
@@ -230,11 +230,91 @@ def handle_action(m):
 
     action = m.text.strip()
     try:
-        # ... (جميع الإجراءات الأخرى تبقى كما هي) ...
-        
-        elif action == "توليد صورة بالذكاء الاصطناعي":
-            # هذه لن تنفذ لأننا نتعامل معها في حالة pending
-            pass
+        # image single operations use last image
+        if action == "تحسين الصورة":
+            inp = st["images"][-1]
+            out = enhance_image(inp)
+            send_photo(m.chat.id, out, caption=f"✅ تم التحسين\nالمطور: {USER_TAG}")
+
+        elif action == "إزالة الخلفية":
+            inp = st["images"][-1]
+            out = remove_bg_image(inp)
+            send_photo(m.chat.id, out, caption=f"🖼️ تمت إزالة الخلفية\nالمطور: {USER_TAG}")
+
+        elif action == "تحويل إلى كرتونية":
+            inp = st["images"][-1]
+            out = cartoonify_image(inp)
+            send_photo(m.chat.id, out, caption=f"🎨 تحويل إلى كرتونية\nالمطور: {USER_TAG}")
+
+        elif action == "تحويل إلى ASCII":
+            inp = st["images"][-1]
+            out = image_to_ascii_file(inp, width=120)
+            send_doc(m.chat.id, out, caption=f"📜 تحويل إلى ASCII\nالمطور: {USER_TAG}")
+
+        elif action == "إضافة علامة مائية":
+            inp = st["images"][-1]
+            out = add_watermark(inp)
+            send_photo(m.chat.id, out, caption=f"💧 تم إضافة العلامة المائية\nالمطور: {USER_TAG}")
+
+        elif action == "تحويل إلى PDF":
+            images = st["images"]
+            out = image_to_pdf(images)
+            send_doc(m.chat.id, out, caption=f"📄 تم تحويل الصور إلى PDF\nالمطور: {USER_TAG}")
+
+        elif action == "ضغط الصورة":
+            inp = st["images"][-1]
+            out = compress_image(inp, quality=70)
+            send_photo(m.chat.id, out, caption=f"📉 تم ضغط الصورة\nالمطور: {USER_TAG}")
+
+        elif action == "أبيض وأسود":
+            inp = st["images"][-1]
+            out = bw_image(inp)
+            send_photo(m.chat.id, out, caption=f"⚪⬛ أبيض وأسود\nالمطور: {USER_TAG}")
+
+        elif action == "عكس الألوان":
+            inp = st["images"][-1]
+            out = invert_colors(inp)
+            send_photo(m.chat.id, out, caption=f"🌀 عكس الألوان\nالمطور: {USER_TAG}")
+
+        elif action == "تدوير الصورة":
+            bot.reply_to(m, "أدخل زاوية التدوير (90, 180, 270):")
+            st["pending"] = {"action": "rotate", "image": st["images"][-1]}
+            return
+
+        elif action == "تحويل إلى ملصق":
+            inp = st["images"][-1]
+            out = image_to_sticker(inp)
+            try:
+                with open(out, "rb") as s:
+                    bot.send_sticker(m.chat.id, s)
+                bot.send_message(m.chat.id, f"✅ تم إنشاء الملصق\nالمطور: {USER_TAG}")
+            except Exception:
+                send_doc(m.chat.id, out, caption=f"✅ تم إنشاء الملصق (ملف webp)\nالمطور: {USER_TAG}")
+
+        # Video actions
+        elif action == "ضغط الفيديو":
+            if not st["videos"]:
+                bot.reply_to(m, "⚠️ لم ترسل فيديو بعد.")
+                return
+            inp = st["videos"][-1]
+            out = compress_video(inp)
+            send_doc(m.chat.id, out, caption=f"📉 تم ضغط الفيديو\nالمطور: {USER_TAG}")
+
+        elif action == "تحويل فيديو إلى GIF":
+            if not st["videos"]:
+                bot.reply_to(m, "⚠️ لم ترسل فيديو بعد.")
+                return
+            inp = st["videos"][-1]
+            out = video_to_gif(inp)
+            send_doc(m.chat.id, out, caption=f"🎞️ تم تحويل الفيديو إلى GIF\nالمطور: {USER_TAG}")
+
+        elif action == "تحويل فيديو إلى ملصق متحرك (webm)":
+            if not st["videos"]:
+                bot.reply_to(m, "⚠️ لم ترسل فيديو بعد.")
+                return
+            inp = st["videos"][-1]
+            out = video_to_animated_sticker(inp)
+            send_doc(m.chat.id, out, caption=f"✅ تم إنشاء الملصق المتحرك (webm)\nالمطور: {USER_TAG}")
 
         else:
             bot.reply_to(m, "❓ أمر غير معروف — اختر من الأزرار أو اكتب /help.")
