@@ -1,9 +1,11 @@
-pyTelegramBotAPI==4.12.0
+pyTelegramBotAPI
 opencv-python
-numpy
-Pillow
 rembg
-onnxruntime
+Pillow
 moviepy
-imageio[ffmpeg]
-openai
+numpy
+diffusers
+transformers
+accelerate
+torch
+torchvision
